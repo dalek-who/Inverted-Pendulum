@@ -30,8 +30,10 @@ class MyPendulumEnv(gym.Env):
 
         self.viewer = None
 
-        high = np.array([1., 1., self.max_speed], dtype=np.float32)
-        self.action_space = spaces.Discrete(3) # -3,0,3三种随机动作。但是采样只能采样出0,1,2，需要进一步映射成-3,0,3
+        # high = np.array([1., 1., self.max_speed], dtype=np.float32)
+        # self.action_space = spaces.Discrete(3) # -3,0,3三种随机动作。但是采样只能采样出0,1,2，需要进一步映射成-3,0,3
+        high = np.array([self.max_theta, self.max_speed])
+        self.action_space = spaces.Box(low=-np.array([-self.max_u]), high=np.array([-self.max_u]), dtype=np.float32)
         self.observation_space = spaces.Box(low=-high, high=high, dtype=np.float32)
 
         self.seed()
@@ -43,37 +45,25 @@ class MyPendulumEnv(gym.Env):
     def step(self, u):
         th, thdot = self.state # th := theta, 角度；thdot：角速度
 
-        m = self.m
-        g = self.g
-        l = self.l
-        J = self.J
-        b = self.b
-        K = self.K
-        R = self.R
-        dt = self.dt
-
         u = np.clip(u, -self.max_u, self.max_u)[0]
         self.last_u = u # for rendering
-        costs = 5 * angle_normalize(th)**2 + .1 * thdot**2 + u**2  # cost是reward的相反数，是正的。reward是负的
-
-        thdotdot = (1/J) * (m * g * l * np.sin(th) - b*thdot - (K**2/R)*thdot + (K/R)*u )  # 角加速度
-        newthdot = thdot + dt * thdotdot  # 角速度更新
-        newth = th + newthdot*dt  # 角度更新
-        newthdot = np.clip(newthdot, -self.max_speed, self.max_speed) #pylint: disable=E1111
+        reward = self.reward(th, thdot, u)
+        newth, newthdot = self.new_state(theta=th, d_theta=thdot, u=u)
 
         self.state = np.array([newth, newthdot])  # 状态更新
         done = np.equal(self.state, np.array([0., 0.])).all()  # 是否达到终止状态
-        return self._get_obs(), -costs, done, {}
+        return self._get_obs(), reward, done, {}
 
     def reset(self):
         high = np.array([np.pi, 1])
-        self.state = np.array([np.pi, 0])
+        # self.state = np.array([np.pi, 0])
+        self.state = self.np_random.uniform(low=-high, high=high)
         self.last_u = None
         return self._get_obs()
 
     def _get_obs(self):
-        theta, thetadot = self.state
-        return np.array([theta, thetadot])
+        theta, d_theta = self.state
+        return np.array([theta, d_theta])
 
     def render(self, mode='human'):  # 渲染图像
 
@@ -112,6 +102,38 @@ class MyPendulumEnv(gym.Env):
         action = action_map[action]
         return action
 
+    def new_state(self, theta, d_theta, u):
+        m = self.m
+        g = self.g
+        l = self.l
+        J = self.J
+        b = self.b
+        K = self.K
+        R = self.R
+        dt = self.dt
+
+        dd_theta = (1/J) * (m * g * l * np.sin(theta) - b*d_theta - (K**2/R)*d_theta + (K/R)*u )  # 角加速度
+        new_theta = theta + dt * d_theta
+        new_d_theta = d_theta + dt * dd_theta
+
+        new_theta = angle_normalize(new_theta)
+        new_d_theta = np.clip(new_d_theta, -self.max_speed, self.max_speed)
+
+        return new_theta, new_d_theta
+
+        # thdotdot = (1/J) * (m * g * l * np.sin(theta) - b*d_theta - (K**2/R)*d_theta + (K/R)*u )  # 角加速度
+        # newthdot = d_theta + dt * thdotdot  # 角速度更新
+        # newth = angle_normalize(theta + newthdot*dt)  # 角度更新
+        # newthdot = np.clip(newthdot, -self.max_speed, self.max_speed) #pylint: disable=E1111
+        # return newth, newthdot
+
+    def reward(self, theta, d_theta, u):
+        costs = 5 * angle_normalize(theta) ** 2 + .1 * d_theta ** 2 + u ** 2  # cost是reward的相反数，是正的。reward是负的
+        return -costs
+
+
+
+
 
 def angle_normalize(x):
     return (((x+np.pi) % (2*np.pi)) - np.pi)
@@ -126,7 +148,8 @@ if __name__=="__main__":
         for t in range(1000):
             env.render()  # 渲染动画
             print(observation)
-            action = env.action_sample()  # 采样动作（实际需要按学习到的策略采样。这里只是个demo），只接受-3，0，3
+            # action = env.action_sample()  # 采样动作（实际需要按学习到的策略采样。这里只是个demo），只接受-3，0，3
+            action  = env.action_space.sample()
             observation, reward, done, info = env.step(action)   # 执行策略。observation=np.array([角度, 角速度])
             if done:
                 print("Episode finished after {} timesteps".format(t + 1))
