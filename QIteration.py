@@ -7,6 +7,7 @@ matplotlib.use('TkAgg')
 import numpy as np
 from time import sleep
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 import os
 
 from game.my_Pendulum import MyPendulumEnv, angle_normalize
@@ -133,7 +134,6 @@ class DiscreteQIteration(object):
         fig.canvas.set_window_title(self.model_name + ": convergence")  # 窗口fig的title
         fig.show()
 
-
     # 用热力图(histogram)可视化每个状态对应的动作
     def show_histogram(self):
         m_index_actions = np.argmax(self.q_table, axis=2)  # 每个(速度，角速度)状态对应的最优action的index
@@ -155,6 +155,7 @@ class DiscreteQIteration(object):
 
         # 子图ax的标题
         ax.set_title("Action of each State\n theta=%s, dot_theta=%s, action=%s" % (self.n_theta, self.n_d_theta, self.n_actions))
+
         # 设置坐标轴格式
         # x轴（角速度）
         ax.set_xlabel('State: dot_theta (rad/s)')  # x轴title
@@ -166,6 +167,7 @@ class DiscreteQIteration(object):
 
         # y轴（角度）
         ax.set_ylabel('State: theta (rad)')  # y轴title
+        ax.invert_yaxis()  # y轴反向。默认y是最上面是0，翻转后下面是0
         y_start, y_end = ax.get_ylim()  # 刻度的起止点。和颜色条的刻度不同，histogram上的x、y轴是有起止点的，刻度线相对位置要在起止点以内
         ax.yaxis.set_ticks(np.linspace(y_start, y_end, 7))  # 设置刻度线位置
         ax.yaxis.set_ticklabels(np.round(np.linspace(-self.max_theta, self.max_theta, 7), decimals=2))  # 设置刻度线上写什么（保留两位小数的角速度）
@@ -174,15 +176,76 @@ class DiscreteQIteration(object):
         fig.tight_layout()  # 适应窗口大小，否则可能有东西在窗口里画不下
         fig.savefig(self.data_dir + "histogram.png")
         fig.canvas.set_window_title(self.model_name + ": histogram")  # 窗口fig的title
-        fig.show()  # 展示窗口fig里的所有子图（此处只有一个子图ax）
+        fig.show()  # 展示窗口fig里的所有子图（此处只有一个子图ax
+
+    # 画3维的q_table，每个action单独画一个曲面。渲染很慢
+    def show_q_table_3d(self):
+        fig = plt.figure()
+        ax = Axes3D(fig)
+
+        # 存储每个离散状态的index的两个meshgrid
+        m_index_d_theta, m_index_theta = np.meshgrid(np.arange(self.n_d_theta), np.arange(self.n_theta))
+        # 每个离散区间的代表值，用于x、y坐标
+        m_theta = self.index_to_value(m_index_theta, -self.max_theta, self.max_theta, self.n_theta)
+        m_d_theta = self.index_to_value(m_index_d_theta, -self.max_d_theta, self.max_d_theta, self.n_d_theta)
+
+        m_q = self.q_table[:, :, 0]  # 以第0个action为例。这个例子发现各个action的q_table画出曲面几乎一模一样
+        # 画曲面
+        ax.plot_surface(m_d_theta, m_theta, m_q, rstride=1, cstride=1, cmap='rainbow')
+        # ax.plot_surface(m_d_theta, m_theta, self.q_table[:, :, 0], rstride=1, cstride=1, cmap='hot')
+        # 在曲面上添加等高线
+        num_contour = 15
+        ax.contour(m_d_theta, m_theta, m_q, levels=num_contour, colors="k", linestyles="solid")  # levels是等高线的数量
+
+        # 画等高线二维投影。有offset选项时是把等高线投影到平行于X-Y的平面上，offset是这个平面的z轴offset
+        ax.contour(m_d_theta, m_theta, m_q, levels=num_contour, cmap="rainbow", linestyles="solid", offset=-5000)
+
+
+        ax.set_zlabel('Z')  # 坐标轴
+        ax.set_ylabel('Y')
+        ax.set_xlabel('X')
+
+        ax.view_init(30, 120)  # 设置仰角，方位角
+        fig.show()
+
+    # 把每一个action的Qtable都投影到二维平面，得到每个action的q_tabel等高线图（比三维曲面图渲染快）
+    def show_contour(self):
+
+        # 存储每个离散状态的index的两个meshgrid
+        m_index_d_theta, m_index_theta = np.meshgrid(np.arange(self.n_d_theta), np.arange(self.n_theta))
+        # 每个离散区间的代表值，作为画图时的横纵坐标
+        m_theta = self.index_to_value(m_index_theta, -self.max_theta, self.max_theta, self.n_theta)
+        m_d_theta = self.index_to_value(m_index_d_theta, -self.max_d_theta, self.max_d_theta, self.n_d_theta)
+
+        fig = plt.figure()
+        # 画出每个action的Q_table等高线图和最大值点。画在同一个fig窗口的多个子图上
+        for i in range(self.n_actions):
+            m_q_table = self.q_table[:, :, i]  # 第i个action的q_table
+            ax = fig.add_subplot(np.ceil(self.n_actions/3).astype(int), 3, i+1)  # 添加子图
+            ax.set_title("Action: %s V" % np.round(self.actions[i], decimals=2))
+            # 等高线图
+            num_contour = 20  # 等高线数量
+            contour = ax.contour(m_d_theta, m_theta, m_q_table, levels=num_contour, linestyles="solid")  # 线条等高线
+            # ax.clabel(contour, fontsize=7, colors="black")  # 给每条等高线标上高度标签
+            ax.contourf(m_d_theta, m_theta, m_q_table, levels=num_contour, cmap="jet", linestyles="solid")  # 颜色分布等高线
+
+            # 在等高线图叠加最大值点的散点图，（这个例子中各个action的等高线图看起来完全一样，画上最大值点后才能看出点区别）
+            m_max_q = m_q_table.max()  # 一个action在各个state下的最大q值
+            m_max_theta, m_max_d_theta = m_theta[m_q_table==m_max_q], m_d_theta[m_q_table==m_max_q]  # 最大q值点对应的state坐标（可能不止一个，得到的是ndarray）
+            ax.scatter(m_max_d_theta, m_max_theta, marker="x", color="white", s=10)  # 用散点图画出最大值点
+            for i in range(len(m_max_theta)):
+                ax.annotate(np.round(m_max_q, decimals=2), (m_max_d_theta[i], m_max_theta[i]))  # 给最大值点标上数值
+        fig.tight_layout()  # 适应窗口大小，否则可能有东西在窗口里画不下
+        fig.show()
 
 
 
 
-
-agent = DiscreteQIteration(n_theta=200, n_d_theta=200, n_actions=11, gamma=0.98)
-agent.train(epsilon=0.1)
+agent = DiscreteQIteration(n_theta=2000, n_d_theta=2000, n_actions=11, gamma=0.98)
+# agent.train(epsilon=0.1)
 agent.load()
 agent.show_histogram()
+agent.show_contour()
+# agent.show_q_table_3d()
 # for i in range(5):
 #     agent.demo()
