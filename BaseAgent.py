@@ -2,8 +2,6 @@
 重写的离散化Q迭代
 """
 
-import matplotlib
-matplotlib.use('TkAgg')
 import numpy as np
 from time import sleep
 import matplotlib.pyplot as plt
@@ -173,6 +171,8 @@ class BaseAgent(object):
         ax.set_xlabel('X')
 
         ax.view_init(30, 120)  # 设置仰角，方位角
+        fig.tight_layout()  # 适应窗口大小，否则可能有东西在窗口里画不下
+        fig.savefig(self.data_dir + "3d-Qtable.png")
         fig.show()
 
     # 把每一个action的Qtable都投影到二维平面，得到每个action的q_tabel等高线图（比三维曲面图渲染快）
@@ -203,4 +203,5 @@ class BaseAgent(object):
             for i in range(len(m_max_theta)):
                 ax.annotate(np.round(m_max_q, decimals=2), (m_max_d_theta[i], m_max_theta[i]))  # 给最大值点标上数值
         fig.tight_layout()  # 适应窗口大小，否则可能有东西在窗口里画不下
+        fig.savefig(self.data_dir + "contour.png")
         fig.show()

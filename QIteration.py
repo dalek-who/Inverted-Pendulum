@@ -1,5 +1,5 @@
 """
-重写的离散化Q迭代
+离散化Q迭代
 """
 
 import matplotlib
