@@ -1,5 +1,5 @@
 """
-参数化方法：深度Q网络(DQN)
+参数化方法：深度Q网络(DQN)，用gym内置的Pendulum-v0倒立摆环境可以成功,但是我自己定义的倒立摆超参数没调出来
 """
 import matplotlib
 # matplotlib.use('TkAgg')
@@ -15,13 +15,15 @@ from collections import deque
 from tqdm import tqdm
 from collections import namedtuple
 from time import sleep
+import matplotlib.pyplot as plt
 
 from BaseAgent import BaseAgent
 
-torch.manual_seed(2)
-np.random.seed(2)
+seed = 2
+torch.manual_seed(seed)
+np.random.seed(seed)
 
-Transition = namedtuple('Transition', ['state', 'feature', 'index_action', 'reward', 'next_state', 'next_feature'])
+Example = namedtuple('Example', ['state', 'feature', 'index_action', 'reward', 'next_state', 'next_feature'])  # 方便dataloader读取，并且可以自由调整feature的维度而不用改变索引
 
 class DQN_Net(nn.Module):
     def __init__(self, n_features, n_actions):
@@ -52,7 +54,8 @@ class DQN_Dataset(Dataset):
 
 
 def state_to_feature(state):
-    return state
+    return state  # Pendulum-v0 返回的state(准确说是observation)是 (sin(theta), cos(theta), d_theta)
+    # return np.array([np.sin(state[0]), np.cos(state[0]), state[1]])  # 我自己的倒立摆的state是(theta, d_theta)，转换成feature
 
 
 class DQN_Agent(BaseAgent):
@@ -62,19 +65,16 @@ class DQN_Agent(BaseAgent):
         self.env = gym.make('Pendulum-v0')
 
     # 通过epsilon贪心策略返回一个action
-    def epsilon_greedy_action(self, feature, epsilon, return_index=False):
-        feature = torch.from_numpy(feature).float().unsqueeze(0)
+    def epsilon_greedy_action(self, feature, epsilon, return_index=False):  # return_index：返回的是action的数值还是index
         if np.random.rand() > 1-epsilon:  # 以1-epsilon的概率返回q最大的action
-            with torch.no_grad():
-                index_action = self.target_net(torch.tensor(feature).float())
-                index_action = index_action.argmax()
-            action = self.actions[index_action.item()]
+            return self.do_action(feature, return_index)
         else:  # 以epsilon的概率随机返回一个action
             index_action = np.random.randint(0, self.n_actions)
             action = np.random.choice(self.actions)
-        action = action if isinstance(action, np.ndarray) else np.array([action])
-        return index_action if return_index else action
+            action = action if isinstance(action, np.ndarray) else np.array([action])
+            return index_action if return_index else action
 
+    # 贪心策略选择action
     def do_action(self, feature, return_index=False):
         feature = torch.from_numpy(feature).float().unsqueeze(0)
         with torch.no_grad():
@@ -87,52 +87,56 @@ class DQN_Agent(BaseAgent):
             action = action if isinstance(action, np.ndarray) else np.array([action])
             return action
 
-    def train_step(self):
-        pass
-
     def train(self):
-        queue_size = 2000
-        num_epoch = 1000
-        episode_len = 200
+        queue_size = 2000  # 样本池（FIFO队列）的大小。每个epoch采样一个episode，当队列满了时用新数据代替最老的旧数据
+        num_epoch = 1000  # epoch数量，每个epoch采样一个episode
+        episode_len = 200  # 一个episode的长度
         batch_size = 32
-        max_epsilon = 1
-        min_epsilon = 0.01
-        epsilon_decay = 0.999
-        max_grad_norm = 0.5
-        lr = 1e-3
-        n_features = 3
+        max_epsilon = 1  # epsilon-greedy采样动作时epsilon是衰减的。这是起始epsilon值
+        min_epsilon = 0.01  # epsilon衰减时不能低于这个值
+        epsilon_decay = 0.999  # epsilon的衰减率
+        max_grad_norm = 0.5  # 梯度剪裁
+        lr = 1e-3  # 学习率
+        render_epoch = 50  # 每多少个epoch渲染一次，展示效果
+        n_features = len(state_to_feature(agent.env.reset()))  # 网络输入的特征数。（sin(theta), cos(theta), d_theta）三个特征
 
-        self.policy_net: nn.Module = DQN_Net(n_actions=self.n_actions, n_features=n_features)
-        self.target_net: nn.Module = DQN_Net(n_actions=self.n_actions, n_features=n_features)
+        self.policy_net: nn.Module = DQN_Net(n_actions=self.n_actions, n_features=n_features)  # 梯度更新的网络
+        self.target_net: nn.Module = DQN_Net(n_actions=self.n_actions, n_features=n_features)  # 用于采样动作的网络
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
 
-        examples_queue = deque(maxlen=queue_size)
-        global_step = -1
-        reward_list = []
-        epsilon = max_epsilon
+        examples_queue = deque(maxlen=queue_size)  # 样本池（FIFO队列）
+        global_step = -1  # 第几个梯度更新step
+        loss_list = []  # 记录每次梯度更新的train_loss
+        epsilon = max_epsilon  # epsilon-greedy的epsilon
         running_reward, running_q = -1000, 0
-        self.optimizer: optim.Optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
+        self.optimizer: optim.Optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)  # 网络优化器
 
         for epoch in tqdm(range(num_epoch), desc="Epoch"):
-            score = 0
+            score = 0  # 一个epoch内采样episode的reward总值
             state = self.env.reset()
+
+            # 采样一个episode
             for episode_step in range(episode_len):  # 采样新的episode
-                feature = state_to_feature(state)  # theta, d_theta, sin(theta), cos(theta)
+                feature = state_to_feature(state)  # (sin(theta), cos(theta), d_theta)
                 index_action = self.epsilon_greedy_action(feature, epsilon=epsilon, return_index=True)  # epsilon-greedy采用action
                 next_state, reward, done, info = self.env.step(np.array([self.actions[index_action]]))
                 next_fearure = state_to_feature(next_state)
-                example = Transition(state, feature, np.array([index_action]), np.array([reward]), next_state, next_fearure)
+                example = Example(state, feature, np.array([index_action]), np.array([reward]), next_state, next_fearure)  # 一个训练样本点
                 examples_queue.append(example)
                 score += reward
                 if done:
                     state = self.env.reset()
                 else:
                     state = next_state
-                if epoch % 50 == 0:
+                if epoch % render_epoch == 0:  # 用来展示当前的网络效果。（但因为是epsilon-greedy采样，看上去不是特别稳定）
                     self.env.render()
+
+            # 将采样的样品转换为torch的DataLoader，方便训练时batch随机采样
             dataset = DQN_Dataset(example_list=examples_queue)
             dataloader = DataLoader(dataset, batch_size=batch_size, sampler=RandomSampler(dataset))
+
+            # 网络训练过程
             for data in dataloader:
                 global_step += 1
 
@@ -150,18 +154,19 @@ class DQN_Agent(BaseAgent):
                 tensor_expected_state_action_q_value = (tensor_next_state_q_values.max(dim=1, keepdim=True)[0] * self.gamma) + tensor_reward  # 依据greedy策略，当前state期望的q_value
                 loss = F.smooth_l1_loss(tensor_state_action_q_value, tensor_expected_state_action_q_value)
 
+                # 梯度更新
                 self.optimizer.zero_grad()
                 loss.backward()
                 for param in self.policy_net.parameters():
                     param.grad.data.clamp_(-max_grad_norm, max_grad_norm)
                 self.optimizer.step()
-                epsilon = max(epsilon * epsilon_decay, min_epsilon)
+                epsilon = max(epsilon * epsilon_decay, min_epsilon)  # epsilon-greedy的epsilon衰减
                 if global_step % 200 == 0:
                     self.target_net.load_state_dict(self.policy_net.state_dict())
                 with torch.no_grad():
                     q = tensor_state_action_q_value.mean().item()
                     running_q = 0.99 * running_q + 0.01 * q
-                reward_list.append(loss.item())
+                loss_list.append(loss.item() / batch_size)
 
             running_reward = running_reward * 0.9 + score * 0.1
             if epoch % 10 == 0:
@@ -169,8 +174,9 @@ class DQN_Agent(BaseAgent):
                     epoch, running_reward, running_q))
             if running_reward>-200:
                 break
-        self.show_convergence_curve(reward_list)
+        self.show_convergence_curve(loss_list)
 
+    # gym展示模型效果
     def demo(self, max_step=1000):
         observation = self.env.reset()
         self.env.render()
@@ -187,6 +193,27 @@ class DQN_Agent(BaseAgent):
                 break
         sleep(2)
         self.env.close()
+
+    # 画收敛曲线
+    def show_convergence_curve(self, diff_list):
+        fig, ax = plt.subplots()
+        plot = ax.plot(np.arange(1, len(diff_list)+1), diff_list)
+
+        # 子图ax的标题
+        ax.set_title("Train loss of each step\n action=%s" % (self.n_actions))  # y可以调整标题的位置
+
+        # 设置坐标轴格式
+        # x轴（step）
+        ax.set_xlabel('step')  # x轴title
+
+        # y轴（二范数）
+        ax.set_ylabel('loss')  # y轴title
+        # 保存与显示
+        fig.tight_layout()  # 适应窗口大小，否则可能有东西在窗口里画不下
+        fig.savefig(self.data_dir + "convergence.png")
+        fig.canvas.set_window_title(self.model_name + ": convergence")  # 窗口fig的title
+        fig.show()
+
 
 
 
