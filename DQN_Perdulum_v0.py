@@ -16,6 +16,7 @@ from tqdm import tqdm
 from collections import namedtuple
 from time import sleep
 import matplotlib.pyplot as plt
+from gym import wrappers
 
 from BaseAgent import BaseAgent
 
@@ -115,6 +116,7 @@ class DQN_Agent(BaseAgent):
         for epoch in tqdm(range(num_epoch), desc="Epoch"):
             score = 0  # 一个epoch内采样episode的reward总值
             state = self.env.reset()
+            epoch_loss = 0
 
             # 采样一个episode
             for episode_step in range(episode_len):  # 采样新的episode
@@ -136,22 +138,23 @@ class DQN_Agent(BaseAgent):
             dataset = DQN_Dataset(example_list=examples_queue)
             dataloader = DataLoader(dataset, batch_size=batch_size, sampler=RandomSampler(dataset))
 
-            # 网络训练过程
+            # 网络训练过程。（和课上讲的不太一样，课上是每采样一个样本训练一次，batch为1。我这里是采样一个episode后训练。反正最终效果也还行）
             for data in dataloader:
                 global_step += 1
 
-                tensor_state = data.state.float()  # 当前state，[theta, d_theta]
-                tensor_feature = data.feature.float()
+                tensor_state = data.state.float()  # 当前state，[sin(theta), cos(theta), d_theta]
+                tensor_feature = data.feature.float()  # 当前state转成网络输入feature
                 tensor_index_action = data.index_action.long()  # 当前state依据epsilon-greedy采样的策略index
                 tensor_reward = data.reward.float()  # 当前(state, action)的reward
                 tensor_next_state = data.next_state.float()  # 下一个state
-                tensor_next_feature = data.next_feature.float()
+                tensor_next_feature = data.next_feature.float()  # 下一个state的feature
 
                 tensor_state_q_values = self.policy_net(tensor_feature)  # 当前state下，神经网络拟合出的每个action的q_value
                 tensor_state_action_q_value = tensor_state_q_values.gather(dim=1, index=tensor_index_action)  # 当前state对应的epsilon-greedy action的，神经网络拟合的q_value
                 with torch.no_grad():
                     tensor_next_state_q_values = self.target_net(tensor_next_feature)  # 下个state下，神经网络拟合出的每个action的q_value
                 tensor_expected_state_action_q_value = (tensor_next_state_q_values.max(dim=1, keepdim=True)[0] * self.gamma) + tensor_reward  # 依据greedy策略，当前state期望的q_value
+                # 注意强化学习和监督学习的loss区别：监督学习的loss是预测值和ground_turth的loss，强化学习loss是预测值域期望值的loss，期望值起了ground_turth的作用
                 loss = F.smooth_l1_loss(tensor_state_action_q_value, tensor_expected_state_action_q_value)
 
                 # 梯度更新
@@ -163,11 +166,14 @@ class DQN_Agent(BaseAgent):
                 epsilon = max(epsilon * epsilon_decay, min_epsilon)  # epsilon-greedy的epsilon衰减
                 if global_step % 200 == 0:
                     self.target_net.load_state_dict(self.policy_net.state_dict())
+
+                # 打印部分结果
                 with torch.no_grad():
                     q = tensor_state_action_q_value.mean().item()
                     running_q = 0.99 * running_q + 0.01 * q
-                loss_list.append(loss.item() / batch_size)
+                epoch_loss += loss.item()
 
+            loss_list.append(epoch_loss / len(examples_queue))
             running_reward = running_reward * 0.9 + score * 0.1
             if epoch % 10 == 0:
                 print('Ep {}\tAverage score: {:.2f}\tAverage Q: {:.2f}'.format(
@@ -177,7 +183,11 @@ class DQN_Agent(BaseAgent):
         self.show_convergence_curve(loss_list)
 
     # gym展示模型效果
-    def demo(self, max_step=1000):
+    def demo(self, max_step=1000, save_video=False):
+        original_env = None
+        if save_video:
+            original_env = self.env
+            self.env = wrappers.Monitor(self.env, self.data_dir + "demo_video", force=True)
         observation = self.env.reset()
         self.env.render()
         sleep(1)
@@ -200,7 +210,7 @@ class DQN_Agent(BaseAgent):
         plot = ax.plot(np.arange(1, len(diff_list)+1), diff_list)
 
         # 子图ax的标题
-        ax.set_title("Train loss of each step\n action=%s" % (self.n_actions))  # y可以调整标题的位置
+        ax.set_title("Train loss of each epoch\n action=%s" % (self.n_actions))  # y可以调整标题的位置
 
         # 设置坐标轴格式
         # x轴（step）
@@ -215,13 +225,13 @@ class DQN_Agent(BaseAgent):
         fig.show()
 
 
-
-
-
-agent = DQN_Agent()
-agent.train()
-for i in range(10):
-    agent.demo()
+if __name__=="_main__":
+    agent = DQN_Agent()
+    agent.train()
+    for i in range(3):
+        agent.demo()
+    agent.demo(save_video=True)
+    agent.env_close()
 
 
 

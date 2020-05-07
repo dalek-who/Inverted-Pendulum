@@ -9,6 +9,7 @@ from time import sleep
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import os
+import gym
 
 from game.my_Pendulum import MyPendulumEnv, angle_normalize
 from BaseAgent import BaseAgent
@@ -57,12 +58,14 @@ class DiscreteQIteration(BaseAgent):
         return np.array([self.actions[action_index]])
 
 
+if __name__ == "__main__":
 
-agent = DiscreteQIteration(n_theta=200, n_d_theta=200, n_actions=11, gamma=0.98)
-agent.train(epsilon=0.1)
-agent.load()
-agent.show_histogram()
-agent.show_contour()
-agent.show_q_table_3d()
-for i in range(5):
-    agent.demo()
+    agent = DiscreteQIteration(n_theta=200, n_d_theta=200, n_actions=3, gamma=0.98)
+    # agent.train(epsilon=0.1)  # 训练模型
+    agent.load()  # load参数
+    # agent.show_histogram()  # 画策略热力图
+    # agent.show_contour()  # 画action的Q值等高线
+    # agent.show_q_table_3d()  # 画一个action的三维Q值曲面
+    # agent.demo(max_step=2000)  # 演示
+    agent.demo(save_video=True)  # 保存视频
+    agent.env_close()

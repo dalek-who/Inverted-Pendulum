@@ -7,6 +7,7 @@ from time import sleep
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import os
+from gym import wrappers
 
 from game.my_Pendulum import MyPendulumEnv, angle_normalize
 
@@ -54,7 +55,11 @@ class BaseAgent(object):
         return index
 
     # 通过gym将agent与环境的交互过程可视化
-    def demo(self, max_step=1000):
+    def demo(self, max_step=1000, save_video=False):
+        original_env = None
+        if save_video:
+            original_env = self.env
+            self.env = wrappers.Monitor(self.env, self.data_dir + "demo_video", force=True)
         observation = self.env.reset()
         self.env.render()
         sleep(1)
@@ -69,6 +74,8 @@ class BaseAgent(object):
                 print("Episode finished after {} timesteps".format(step + 1))
                 break
         sleep(2)
+
+    def env_close(self):
         self.env.close()
 
     def save(self):
