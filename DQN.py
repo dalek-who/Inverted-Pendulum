@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 from gym import wrappers
 
 from BaseAgent import BaseAgent
+from game.my_Pendulum import MyPendulumEnv
 
 seed = 2
 torch.manual_seed(seed)
